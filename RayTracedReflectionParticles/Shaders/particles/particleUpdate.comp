@@ -1,0 +1,111 @@
+#version 450
+
+layout (local_size_x = 16, local_size_y = 1, local_size_z = 1) in;
+
+struct ParticleInfo
+{
+    vec4 positionBornTime;
+	vec4 velocityLifeTime;
+};
+layout (std430, binding = 0) buffer particleInfoBuffer 
+{
+    ParticleInfo particleInfo[1000];    
+}; 
+
+struct ParticleVertex
+{
+    vec3 pos;
+    vec2 texCoord;
+};
+/*struct ParticleQuad
+{
+    ParticleVertex vertices[4];
+};*/
+layout (std430, binding = 1) buffer particleVertexBuffer 
+{
+    float particleQuadsData[1000 * 4 * 5];    
+}; 
+
+layout(binding = 2, std140) uniform readonly UniformBufferFrame
+{
+    float frameTime;
+    float fullTime;
+} ubFrame;
+
+float rand(vec2 co)
+{
+    return fract(sin(dot(co.xy, vec2(12.9898,78.233))) * 43758.5453);
+}
+
+float MAX_LIFE_TIME = 2000.0;
+float MAX_DIE_TIME = 500.0;
+
+float X_SIZE_DIV_2 = 1.0 / 20.0;
+float Y_SIZE_DIV_2 = 1.0 / 20.0;
+
+uint copyToVertexBuffer(ParticleVertex vertex, uint firstIndex)
+{
+    particleQuadsData[firstIndex] = vertex.pos.x;
+    particleQuadsData[firstIndex + 1] = vertex.pos.y;
+    particleQuadsData[firstIndex + 2] = vertex.pos.z;
+
+    particleQuadsData[firstIndex + 3] = vertex.texCoord.x;
+    particleQuadsData[firstIndex + 4] = vertex.texCoord.y;
+
+    return firstIndex + 5;
+}
+
+void main() 
+{
+    vec3 currentPos = particleInfo[gl_GlobalInvocationID.x].positionBornTime.xyz;
+    vec3 currentVel = particleInfo[gl_GlobalInvocationID.x].velocityLifeTime.xyz;
+    float currentBornTime = particleInfo[gl_GlobalInvocationID.x].positionBornTime.w;
+    float currentLifeTime = particleInfo[gl_GlobalInvocationID.x].velocityLifeTime.w;
+
+    float randNumber1 = rand(vec2(ubFrame.fullTime, gl_GlobalInvocationID.x));
+    float randNumber2 = rand(vec2(ubFrame.fullTime + 1, gl_GlobalInvocationID.x));
+    float randNumber3 = rand(vec2(ubFrame.fullTime + 2, gl_GlobalInvocationID.x));
+    float randNumber4 = rand(vec2(ubFrame.fullTime + 3, gl_GlobalInvocationID.x));
+    float randNumber5 = rand(vec2(ubFrame.fullTime + 4, gl_GlobalInvocationID.x));
+    float randNumber6 = rand(vec2(ubFrame.fullTime + 5, gl_GlobalInvocationID.x));
+
+    // Particle will die
+    if(currentBornTime >= currentLifeTime)
+    {
+        particleInfo[gl_GlobalInvocationID.x].positionBornTime.w = -randNumber1 * MAX_DIE_TIME;
+        particleInfo[gl_GlobalInvocationID.x].velocityLifeTime.w = randNumber2 * MAX_LIFE_TIME + 1000.0;
+        particleInfo[gl_GlobalInvocationID.x].positionBornTime.xyz = vec3(0.0);
+        particleInfo[gl_GlobalInvocationID.x].velocityLifeTime.xyz = 2.0 * vec3(randNumber3 * 2.0 - 1.0, (randNumber4 * 3.0 + 2.0), randNumber5 * 2.0 - 1.0);
+    }
+    else // particle update
+    {
+        particleInfo[gl_GlobalInvocationID.x].positionBornTime.w += ubFrame.frameTime;
+        if(particleInfo[gl_GlobalInvocationID.x].positionBornTime.w < 0.0)
+            return;
+        
+        particleInfo[gl_GlobalInvocationID.x].positionBornTime.xyz = currentPos + currentVel * (ubFrame.frameTime / 1000.0);
+        particleInfo[gl_GlobalInvocationID.x].velocityLifeTime.xyz = currentVel - vec3(0.0, 9.81, 0.0) * (ubFrame.frameTime / 1000.0);
+    }
+
+    uint firstIndex = gl_GlobalInvocationID.x * 4 * 5;
+
+    ParticleVertex vertex0;
+    vertex0.pos = particleInfo[gl_GlobalInvocationID.x].positionBornTime.xyz + vec3(0.0, Y_SIZE_DIV_2, 0.0);
+    vertex0.texCoord = vec2(0.0, 0.0);
+    firstIndex = copyToVertexBuffer(vertex0, firstIndex);
+
+    ParticleVertex vertex1;
+    vertex1.pos = particleInfo[gl_GlobalInvocationID.x].positionBornTime.xyz + vec3(X_SIZE_DIV_2, Y_SIZE_DIV_2, 0.0);
+    vertex1.texCoord = vec2(1.0, 0.0);
+    firstIndex = copyToVertexBuffer(vertex1, firstIndex);
+
+    ParticleVertex vertex2;
+    vertex2.pos = particleInfo[gl_GlobalInvocationID.x].positionBornTime.xyz + vec3(0.0, 0.0, 0.0);
+    vertex2.texCoord = vec2(0.0, 1.0);
+    firstIndex = copyToVertexBuffer(vertex2, firstIndex);
+
+    ParticleVertex vertex3;
+    vertex3.pos = particleInfo[gl_GlobalInvocationID.x].positionBornTime.xyz + vec3(X_SIZE_DIV_2, 0.0, 0.0);
+    vertex3.texCoord = vec2(1.0, 1.0);
+    firstIndex = copyToVertexBuffer(vertex3, firstIndex);
+} 

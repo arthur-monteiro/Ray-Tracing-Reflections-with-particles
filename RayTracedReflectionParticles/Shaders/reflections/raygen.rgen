@@ -1,0 +1,77 @@
+#version 460
+#extension GL_NV_ray_tracing : require
+
+layout(binding = 0, set = 0) uniform accelerationStructureNV topLevelAS;
+layout(binding = 1, set = 0) uniform accelerationStructureNV particleTopLevelAS;
+layout(binding = 2, set = 0, rgba8) uniform readonly image2D inReflectionIntensity;
+layout(binding = 3, set = 0) uniform UniformBuffer
+{
+    mat4 invProjection;
+    mat4 invView;
+    vec4 projParams;
+    vec4 camPos;
+} ub;
+layout (binding = 10, set = 0, r32f) uniform readonly image2D inDepth;
+layout (binding = 11, rgba8) uniform readonly image2D inNormalRoughnessMetal;
+layout (binding = 12, rgba32f) uniform image2D outImage;
+
+struct CommonPayload
+{
+    // From closest hit values
+    vec3 value;
+    float rayLength;
+};
+layout(location = 0) rayPayloadNV CommonPayload payload;
+
+vec3 decodeNormal (vec2 enc, vec3 view)
+{
+    vec2 fenc = enc * 4.0 - vec2(2.0);
+    float f = dot(fenc,fenc);
+    float g = sqrt(1.0 - f / 4.0);
+    vec3 n;
+    n.xy = fenc * g;
+    n.z = 1.0 - f / 2.0;
+    return n;
+}
+
+void main() 
+{
+    const vec2 inUV = gl_LaunchIDNV.xy / vec2(imageSize(inDepth));
+    vec2 d = inUV * 2.0 - 1.0;
+
+    vec4 viewRay = ub.invProjection * vec4(d.x, d.y, 1.0, 1.0);
+    float depth = imageLoad(inDepth, ivec2(gl_LaunchIDNV.x, gl_LaunchIDNV.y)).r;
+    float linearDepth = ub.projParams.y / (depth - ub.projParams.x);
+    vec3 viewPos = viewRay.xyz * linearDepth;
+    vec3 worldPos = (ub.invView * vec4(viewPos, 1.0)).xyz;
+
+    vec3 reflectionQuantity = imageLoad(inReflectionIntensity, ivec2(gl_LaunchIDNV.x, gl_LaunchIDNV.y)).rgb;
+    if(reflectionQuantity == vec3(0.0))
+        return;
+
+    vec3 normal = vec3(0.0, 1.0, 0.0); //mat3(ub.invView) * decodeNormal(imageLoad(inNormalRoughnessMetal, ivec2(gl_LaunchIDNV.x, gl_LaunchIDNV.y)).rg, viewPos);
+
+    uint rayFlags = gl_RayFlagsOpaqueNV;
+    uint cullMask = 0xff;
+    float tmin = 0.001;
+    float tmax = 10000.0;
+
+    payload.rayLength = 1000000.0;
+
+    vec3 direction = reflect(normalize(worldPos - ub.camPos.xyz), normal);
+    traceNV(topLevelAS, rayFlags, cullMask, 0 /*sbtRecordOffset*/, 0 /*sbtRecordStride*/, 0 /*missIndex*/, worldPos + direction * 0.1, tmin, direction, tmax, 0 /*payload*/);
+
+    float staticLength = payload.rayLength;
+    vec3 staticValue = payload.value;
+    
+    payload.rayLength = 1000000.0;
+    payload.value = vec3(0.0);
+    traceNV(particleTopLevelAS, rayFlags, cullMask, 1 /*sbtRecordOffset*/, 0 /*sbtRecordStride*/, 0 /*missIndex*/, worldPos + direction * 0.1, tmin, direction, tmax, 0 /*payload*/);
+   
+    vec3 fValue = payload.value;
+    if(staticLength < payload.rayLength)
+        fValue = staticValue;
+
+    vec3 color = reflectionQuantity * fValue + imageLoad(outImage, ivec2(gl_LaunchIDNV.x, gl_LaunchIDNV.y)).rgb;
+    imageStore(outImage, ivec2(gl_LaunchIDNV.xy), vec4(color, 0.0));
+}
